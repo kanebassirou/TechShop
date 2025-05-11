@@ -65,6 +65,9 @@ L'application contient volontairement les vulnérabilités suivantes à des fins
 ```
 ' OR '1'='1
 ' OR '1'='1' --
+
+' OR 1=1 --
+
 ' UNION SELECT username, password FROM users --
 ```
 
