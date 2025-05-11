@@ -1,34 +1,81 @@
 <?php
-// products.php
+// products.php - Version sécurisée
 include 'db.php';
 session_start();
 
-// Récupération des paramètres (vulnérable à l'injection SQL)
+// Récupération des paramètres avec nettoyage
 $category = isset($_GET['category']) ? $_GET['category'] : '';
 $search = isset($_GET['search']) ? $_GET['search'] : '';
-$sort = isset($_GET['sort']) ? $_GET['sort'] : 'name';
 
-// Construction de la requête SQL (vulnérable à l'injection SQL)
+// Liste des options de tri autorisées (liste blanche)
+$allowed_sort_options = [
+    'name' => 'name',
+    'name_desc' => 'name DESC',
+    'price_asc' => 'price',
+    'price_desc' => 'price DESC'
+];
+
+// Validation du paramètre de tri
+$sort_key = isset($_GET['sort']) ? $_GET['sort'] : 'name';
+$sort = isset($allowed_sort_options[$sort_key]) ? $allowed_sort_options[$sort_key] : 'name';
+
+// Utilisation de requêtes préparées pour éviter les injections SQL
+$params = [];
+$types = '';
+
 $sql = "SELECT * FROM products WHERE 1=1";
 
 if (!empty($category)) {
-    $sql .= " AND category = '$category'";
+    $sql .= " AND category = ?";
+    $params[] = $category;
+    $types .= 's';
 }
 
 if (!empty($search)) {
-    $sql .= " AND (name LIKE '%$search%' OR description LIKE '%$search%')";
+    $sql .= " AND (name LIKE ? OR description LIKE ?)";
+    $search_param = "%$search%";
+    $params[] = $search_param;
+    $params[] = $search_param;
+    $types .= 'ss';
 }
 
-// Tri (vulnérable à l'injection SQL)
-$sql .= " ORDER BY $sort";
+// Utiliser un switch pour contrôler strictement l'option de tri
+// Cette approche est plus sécurisée que de passer directement la variable dans la requête
+switch ($sort) {
+    case 'name DESC':
+        $sql .= " ORDER BY name DESC";
+        break;
+    case 'price':
+        $sql .= " ORDER BY price ASC";
+        break;
+    case 'price DESC':
+        $sql .= " ORDER BY price DESC";
+        break;
+    default:
+        $sql .= " ORDER BY name ASC";
+}
 
-$result = $conn->query($sql);
+// Préparation et exécution de la requête
+$stmt = $conn->prepare($sql);
+
+if (!empty($params)) {
+    // Uniquement lier des paramètres s'il y en a
+    $stmt->bind_param($types, ...$params);
+}
+
+$stmt->execute();
+$result = $stmt->get_result();
 
 $products = [];
 if ($result && $result->num_rows > 0) {
     while ($row = $result->fetch_assoc()) {
         $products[] = $row;
     }
+}
+
+// Génération du token CSRF pour les formulaires
+if (!isset($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
 ?>
 
@@ -38,6 +85,12 @@ if ($result && $result->num_rows > 0) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Nos Produits - TechShop</title>
+    
+    <!-- Ajout d'en-têtes de sécurité -->
+    <meta http-equiv="X-Content-Type-Options" content="nosniff">
+    <meta http-equiv="X-Frame-Options" content="DENY">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; script-src 'self' https://cdn.jsdelivr.net;">
+    
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css">
     <style>
@@ -84,7 +137,10 @@ if ($result && $result->num_rows > 0) {
                         <a class="nav-link" href="contact.php">Contact</a>
                     </li>
                 </ul>
+                <!-- Formulaire de recherche sécurisé -->
                 <form class="d-flex" action="products.php" method="GET">
+                    <!-- Protection CSRF -->
+                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
                     <input class="form-control me-2" type="search" name="search" placeholder="Rechercher" value="<?php echo htmlspecialchars($search); ?>">
                     <button class="btn btn-outline-primary" type="submit">Rechercher</button>
                 </form>
@@ -94,7 +150,11 @@ if ($result && $result->num_rows > 0) {
                             <a class="nav-link" href="profile.php">Mon compte</a>
                         </li>
                         <li class="nav-item">
-                            <a class="nav-link" href="logout.php">Déconnexion</a>
+                            <!-- Formulaire de déconnexion sécurisé contre CSRF -->
+                            <form action="logout.php" method="POST" class="d-inline">
+                                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
+                                <button type="submit" class="btn nav-link">Déconnexion</button>
+                            </form>
                         </li>
                     <?php else: ?>
                         <li class="nav-item">
@@ -113,20 +173,22 @@ if ($result && $result->num_rows > 0) {
     <div class="container my-5">
         <h1 class="page-title">Nos Produits</h1>
         
-        <!-- Filtres et tri (vulnérables à XSS et injection SQL) -->
+        <!-- Filtres et tri sécurisés -->
         <div class="filters">
             <form action="products.php" method="GET" class="row g-3">
+                <!-- Protection CSRF -->
+                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
                 <div class="col-md-4">
                     <label for="search" class="form-label">Rechercher</label>
-                    <input type="text" class="form-control" id="search" name="search" value="<?php echo $search; ?>">
+                    <input type="text" class="form-control" id="search" name="search" value="<?php echo htmlspecialchars($search); ?>">
                 </div>
                 <div class="col-md-4">
                     <label for="sort" class="form-label">Trier par</label>
                     <select class="form-select" id="sort" name="sort">
-                        <option value="name" <?php echo $sort == 'name' ? 'selected' : ''; ?>>Nom (A-Z)</option>
-                        <option value="name DESC" <?php echo $sort == 'name DESC' ? 'selected' : ''; ?>>Nom (Z-A)</option>
-                        <option value="price" <?php echo $sort == 'price' ? 'selected' : ''; ?>>Prix croissant</option>
-                        <option value="price DESC" <?php echo $sort == 'price DESC' ? 'selected' : ''; ?>>Prix décroissant</option>
+                        <option value="name" <?php echo $sort_key == 'name' ? 'selected' : ''; ?>>Nom (A-Z)</option>
+                        <option value="name_desc" <?php echo $sort_key == 'name_desc' ? 'selected' : ''; ?>>Nom (Z-A)</option>
+                        <option value="price_asc" <?php echo $sort_key == 'price_asc' ? 'selected' : ''; ?>>Prix croissant</option>
+                        <option value="price_desc" <?php echo $sort_key == 'price_desc' ? 'selected' : ''; ?>>Prix décroissant</option>
                     </select>
                 </div>
                 <div class="col-md-4 d-flex align-items-end">
@@ -135,7 +197,7 @@ if ($result && $result->num_rows > 0) {
             </form>
         </div>
         
-        <!-- Liste des produits -->
+        <!-- Liste des produits avec protection XSS -->
         <div class="row">
             <?php if (count($products) > 0): ?>
                 <?php foreach($products as $product): ?>
@@ -147,7 +209,7 @@ if ($result && $result->num_rows > 0) {
                                 <p class="card-text"><?php echo htmlspecialchars(substr($product['description'], 0, 100)) . '...'; ?></p>
                                 <div class="d-flex justify-content-between align-items-center">
                                     <span class="text-primary fw-bold"><?php echo number_format($product['price'], 2); ?> €</span>
-                                    <a href="product.php?id=<?php echo $product['id']; ?>" class="btn btn-sm btn-outline-primary">Voir détails</a>
+                                    <a href="product.php?id=<?php echo (int)$product['id']; ?>" class="btn btn-sm btn-outline-primary">Voir détails</a>
                                 </div>
                             </div>
                         </div>
@@ -189,7 +251,7 @@ if ($result && $result->num_rows > 0) {
             </div>
             <hr>
             <div class="text-center">
-                <p>&copy; <?php echo date('Y'); ?> TechShop - Application de démonstration (vulnérable pour tests de sécurité)</p>
+                <p>&copy; <?php echo date('Y'); ?> TechShop - Version sécurisée</p>
             </div>
         </div>
     </footer>

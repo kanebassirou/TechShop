@@ -2,12 +2,19 @@
 include 'db.php';
 session_start();
 
-// Récupération de l'ID du produit (vulnérable à l'injection SQL)
+// CORRIGÉ: Protection contre l'injection SQL avec requête préparée
 $product_id = isset($_GET['id']) ? $_GET['id'] : 0;
+if (!is_numeric($product_id)) {
+    // Validation supplémentaire pour s'assurer que l'ID est numérique
+    header('Location: index.php');
+    exit;
+}
 
-// Requête vulnérable
-$sql = "SELECT * FROM products WHERE id = $product_id";
-$result = $conn->query($sql);
+// CORRIGÉ: Utilisation de requêtes préparées pour éviter les injections SQL
+$stmt = $conn->prepare("SELECT * FROM products WHERE id = ?");
+$stmt->bind_param("i", $product_id);
+$stmt->execute();
+$result = $stmt->get_result();
 
 if ($result && $result->num_rows > 0) {
     $product = $result->fetch_assoc();
@@ -16,25 +23,37 @@ if ($result && $result->num_rows > 0) {
     exit;
 }
 
-// Traitement des commentaires
+// CORRIGÉ: Traitement des commentaires avec protection
 if (isset($_POST['comment']) && isset($_SESSION['user_id'])) {
+    // CORRIGÉ: Vérification CSRF
+    if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
+        die("Erreur de validation du formulaire. Veuillez réessayer.");
+    }
+    
     $user_id = $_SESSION['user_id'];
     $comment_text = $_POST['comment'];
     $rating = isset($_POST['rating']) ? (int)$_POST['rating'] : 5;
     
-    // Insertion vulnérable
-    $sql = "INSERT INTO comments (user_id, product_id, comment, rating) 
-            VALUES ($user_id, $product_id, '$comment_text', $rating)";
-    $conn->query($sql);
+    // Validation du rating
+    if ($rating < 1 || $rating > 5) {
+        $rating = 5; // Valeur par défaut si hors limites
+    }
+    
+    // CORRIGÉ: Requête préparée pour l'insertion sécurisée
+    $insert_stmt = $conn->prepare("INSERT INTO comments (user_id, product_id, comment, rating) VALUES (?, ?, ?, ?)");
+    $insert_stmt->bind_param("iisi", $user_id, $product_id, $comment_text, $rating);
+    $insert_stmt->execute();
 }
 
-// Récupération des commentaires - modifiée pour être plus robuste face aux erreurs SQL
+// CORRIGÉ: Récupération des commentaires avec requête préparée
 try {
-    $sql = "SELECT c.*, u.username FROM comments c 
-            JOIN users u ON c.user_id = u.id 
-            WHERE c.product_id = $product_id 
-            ORDER BY c.created_at DESC";
-    $comments_result = $conn->query($sql);
+    $comments_stmt = $conn->prepare("SELECT c.*, u.username FROM comments c 
+                                     JOIN users u ON c.user_id = u.id 
+                                     WHERE c.product_id = ? 
+                                     ORDER BY c.created_at DESC");
+    $comments_stmt->bind_param("i", $product_id);
+    $comments_stmt->execute();
+    $comments_result = $comments_stmt->get_result();
     $comments = [];
 
     if ($comments_result && $comments_result->num_rows > 0) {
@@ -43,10 +62,13 @@ try {
         }
     }
 } catch (Exception $e) {
-    // En cas d'erreur SQL, on continue avec un tableau vide de commentaires
     $comments = [];
-    // Pour déboguer pendant le développement, décommentez :
-    // echo "<div class='alert alert-danger'>Erreur: " . $e->getMessage() . "</div>";
+    error_log("Erreur lors de la récupération des commentaires: " . $e->getMessage());
+}
+
+// CORRIGÉ: Génération du token CSRF pour le formulaire
+if (!isset($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
 ?>
 <!DOCTYPE html>
@@ -55,6 +77,11 @@ try {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title><?php echo htmlspecialchars($product['name']); ?> - TechShop</title>
+  <!-- CORRIGÉ: Ajout des en-têtes de sécurité -->
+  <meta http-equiv="X-Content-Type-Options" content="nosniff">
+  <meta http-equiv="X-Frame-Options" content="DENY">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; script-src 'self' https://cdn.jsdelivr.net;">
+  
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css">
   <style>
@@ -102,7 +129,11 @@ try {
               <a class="nav-link" href="profile.php">Mon compte</a>
             </li>
             <li class="nav-item">
-              <a class="nav-link" href="logout.php">Déconnexion</a>
+              <!-- CORRIGÉ: Formulaire de déconnexion sécurisé -->
+              <form action="logout.php" method="POST" class="d-inline">
+                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
+                <button type="submit" class="btn nav-link">Déconnexion</button>
+              </form>
             </li>
           <?php else: ?>
             <li class="nav-item">
@@ -118,10 +149,12 @@ try {
   <div class="container my-5">
     <div class="row">
       <div class="col-md-6">
-        <img src="images/<?php echo $product['image_url']; ?>" alt="<?php echo $product['name']; ?>" class="img-fluid product-image">
+        <!-- CORRIGÉ: Échappement des attributs HTML -->
+        <img src="images/<?php echo htmlspecialchars($product['image_url']); ?>" alt="<?php echo htmlspecialchars($product['name']); ?>" class="img-fluid product-image">
       </div>
       <div class="col-md-6">
-        <h1><?php echo $product['name']; ?></h1>
+        <!-- CORRIGÉ: Échappement des données -->
+        <h1><?php echo htmlspecialchars($product['name']); ?></h1>
         <div class="rating mb-3">
           <i class="fas fa-star"></i>
           <i class="fas fa-star"></i>
@@ -131,11 +164,14 @@ try {
           <span class="ms-2 text-muted">(<?php echo count($comments); ?> avis)</span>
         </div>
         <h3 class="text-primary mb-4"><?php echo number_format($product['price'], 2); ?> €</h3>
-        <p class="mb-4"><?php echo nl2br($product['description']); ?></p>
+        <!-- CORRIGÉ: Échappement avant nl2br -->
+        <p class="mb-4"><?php echo nl2br(htmlspecialchars($product['description'])); ?></p>
         
         <div class="add-to-cart-section">
+          <!-- CORRIGÉ: Protection CSRF du formulaire -->
           <form action="add_to_cart.php" method="POST">
-            <input type="hidden" name="product_id" value="<?php echo $product['id']; ?>">
+            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
+            <input type="hidden" name="product_id" value="<?php echo (int)$product['id']; ?>">
             <div class="row g-3 align-items-center mb-3">
               <div class="col-auto">
                 <label for="quantity" class="col-form-label">Quantité</label>
@@ -157,7 +193,7 @@ try {
         <div class="mt-4">
           <p>
             <i class="fas fa-check-circle text-success me-2"></i> 
-            <?php echo $product['stock'] > 0 ? 'En stock' : 'Rupture de stock'; ?>
+            <?php echo (int)$product['stock'] > 0 ? 'En stock' : 'Rupture de stock'; ?>
           </p>
           <p><i class="fas fa-truck me-2"></i> Livraison gratuite à partir de 50€</p>
         </div>
@@ -170,10 +206,12 @@ try {
         <h3 class="mb-4">Commentaires et avis</h3>
         
         <?php if(isset($_SESSION['user_id'])): ?>
-        <!-- Formulaire d'ajout de commentaire (vulnérable à XSS) -->
+        <!-- CORRIGÉ: Formulaire d'ajout de commentaire avec protection CSRF-->
         <div class="card mb-4">
           <div class="card-body">
             <form method="POST">
+              <!-- Protection CSRF -->
+              <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
               <div class="mb-3">
                 <label for="rating" class="form-label">Votre note</label>
                 <select name="rating" id="rating" class="form-select">
@@ -216,8 +254,8 @@ try {
                     <?php endif; ?>
                   <?php endfor; ?>
                 </div>
-                <!-- Affichage vulnérable à XSS -->
-                <p><?php echo $comment['comment']; ?></p>
+                <!-- CORRIGÉ: Protection contre XSS -->
+                <p><?php echo htmlspecialchars($comment['comment']); ?></p>
               </div>
             <?php endforeach; ?>
           <?php else: ?>
@@ -255,7 +293,7 @@ try {
       </div>
       <hr>
       <div class="text-center">
-        <p>&copy; <?php echo date('Y'); ?> TechShop - Application de démonstration (vulnérable pour tests de sécurité)</p>
+        <p>&copy; <?php echo date('Y'); ?> TechShop - Version sécurisée</p>
       </div>
     </div>
   </footer>

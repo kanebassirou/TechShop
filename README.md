@@ -1,10 +1,6 @@
-# TechShop - Application Web Vulnérable pour Audit de Sécurité
+# TechShop - Application Web Sécurisée (Version Corrigée)
 
-Cette application est conçue à des fins éducatives pour illustrer et pratiquer différentes phases d'un audit de sécurité complet.
-
-## ⚠️ AVERTISSEMENT
-
-Cette application contient intentionnellement des vulnérabilités de sécurité. NE DÉPLOYEZ JAMAIS cette application sur un serveur de production ou sur un serveur accessible publiquement.
+Cette application était initialement conçue à des fins éducatives pour illustrer différentes vulnérabilités web. Cette version a été corrigée et sécurisée suite à un audit complet.
 
 ## Installation
 
@@ -13,120 +9,75 @@ Cette application contient intentionnellement des vulnérabilités de sécurité
 3. Importez la base de données en visitant `http://localhost/vulnerable-app/setup.php`
 4. Accédez à l'application via `http://localhost/vulnerable-app/`
 
-## Compte administrateur par défaut
+## Compte administrateur
 
 - Nom d'utilisateur: `admin`
-- Mot de passe: `admin`
+- Utilisez le mot de passe créé lors de l'installation
 
-## Vulnérabilités présentes
+## Vulnérabilités corrigées
 
-L'application contient volontairement les vulnérabilités suivantes à des fins de test et d'apprentissage :
+L'application a été sécurisée contre les vulnérabilités suivantes :
 
-### 1. Injection SQL
+### 1. Contournement de l'authentification
+- Vérification des permissions avant tout accès aux pages d'administration
+- Contrôle systématique du rôle utilisateur dans chaque requête administrative
+- Protection des URLs directes contre les accès non autorisés
+- Implémentation d'une couche de vérification au niveau du routeur de l'application
 
-- Page de connexion (`login.php`)
-- Page de changement de mot de passe (`change_password.php`)
-- Détails du produit (`product.php`)
+### 2. Injection SQL
+- Utilisation de requêtes préparées et PDO
+- Validation des entrées utilisateur
+- Limitation des privilèges de la base de données
 
 ### 2. Cross-Site Scripting (XSS)
-
-- Page de commentaires (`comment.php`)
-- Recherche sur la page d'accueil (`index.php`)
-- Affichage des commentaires sur les produits (`product.php`)
+- Échappement des sorties HTML
+- Implémentation de Content Security Policy (CSP)
+- Validation des entrées utilisateur
 
 ### 3. Cross-Site Request Forgery (CSRF)
-
-- Changement de mot de passe (`change_password.php`)
-- Formulaire de contact (`contact.php`)
+- Tokens CSRF sur tous les formulaires
+- Vérification de l'origine des requêtes
+- Implémentation de SameSite cookies
 
 ### 4. Injection de commandes
+- Suppression des fonctions d'exécution de commande
+- Implémentation d'une liste blanche pour les entrées
+- Validation stricte des données
 
-- Page de contact (`contact.php`, commentée pour éviter l'exécution réelle)
+### 5. Upload de fichiers
+- Validation du type MIME
+- Renommage aléatoire des fichiers
+- Vérification du contenu des fichiers
+- Stockage hors de la racine web
 
-### 5. Upload de fichier non sécurisé
+### 6. Protection des informations sensibles
+- Suppression des informations de débogage et versions
+- Gestion appropriée des erreurs
+- Nettoyage des commentaires sensibles
 
-- Page de profil utilisateur (`profile.php`)
+### 7. Contrôle d'accès
+- Implémentation de RBAC (Role-Based Access Control)
+- Vérification systématique des permissions
+- Sessions sécurisées
 
-### 6. Divulgation d'informations sensibles
+## Bonnes pratiques implémentées
 
-- Divulgation des versions de logiciels
-- Affichage des erreurs PHP
-- Commentaires contenant des informations sensibles
+- **Authentification** : Hachage sécurisé des mots de passe avec Argon2id
+- **Sessions** : Configuration sécurisée (httpOnly, secure, SameSite)
+- **Base de données** : Utilisation de requêtes préparées exclusivement
+- **Journalisation** : Enregistrement des événements de sécurité
+- **En-têtes HTTP** : Headers de sécurité (CSP, X-XSS-Protection, etc.)
+- **Validation** : Filtrage des entrées et sorties systématique
 
-### 7. Contrôle d'accès défectueux
+## Résultats de l'audit final
 
-- Zone d'administration accessible aux utilisateurs non administrateurs (`admin/dashboard.php`)
-- Manque de validation des droits d'accès sur les fonctionnalités administratives
+- Élimination de toutes les vulnérabilités critiques et majeures
+- Réduction significative de la surface d'attaque
+- Implémentation des recommandations OWASP
+- Conformité aux bonnes pratiques de sécurité actuelles
 
-## Exemples d'exploitation
-
-### Injection SQL
-
-```
-' OR '1'='1
-' OR '1'='1' --
-' UNION SELECT username, password FROM users --
-```
-
-### XSS
-
-```
-<script>alert('XSS')</script>
-<img src="x" onerror="alert('XSS')">
-<svg onload="alert('XSS')">
-```
-
-### Accès non autorisé
-
-```
-# Connexion en tant qu'utilisateur normal puis accès à :
-http://localhost/vulnerable-app/admin/dashboard.php
-```
-
-## Méthodologie d'audit de sécurité
-
-Cette application sert de support pour pratiquer les différentes phases d'un audit de sécurité :
-
-### 1. Phase de test
-
-- **Reconnaissance** : Identification des technologies utilisées et cartographie de l'application
-- **Analyse automatisée** : Utilisation d'outils comme OWASP ZAP, Nikto, SQLmap
-- **Test manuel** : Exploitation des vulnérabilités identifiées
-- **Documentation** : Consignation précise des vulnérabilités et vecteurs d'attaque
-
-### 2. Phase de remédiation
-
-- **Priorisation** : Classification des vulnérabilités selon leur gravité (CVSS)
-- **Développement de correctifs** : Implémentation de solutions pour chaque vulnérabilité
-- **Mesures de contournement** : Configuration de barrières de sécurité temporaires
-
-### 3. Phase finale
-
-- **Tests de validation** : Vérification que les vulnérabilités ont bien été corrigées
-- **Revue de code** : Analyse approfondie du code pour s'assurer qu'aucune nouvelle vulnérabilité n'a été introduite
-- **Documentation finale** : Rapport détaillant l'état initial, les corrections apportées et les recommandations
-
-## Livrables du projet d'audit
-
-- Rapport initial détaillant les vulnérabilités (avec preuves de concept)
-- Plan de remédiation avec priorisation des correctifs
-- Code source sécurisé après corrections
-- Rapport final comparant l'état initial et final de l'application
-- Présentation des résultats et recommandations
-
-## Objectifs d'apprentissage
-
-Cette application peut être utilisée pour:
-
-- Comprendre comment fonctionnent les vulnérabilités web courantes
-- Pratiquer les techniques de test de sécurité
-- Apprendre à sécuriser une application web en identifiant et corrigeant les vulnérabilités
-- Maîtriser la méthodologie complète d'un audit de sécurité
-
-## Ressources supplémentaires
+## Ressources
 
 - [OWASP Top 10](https://owasp.org/www-project-top-ten/)
-- [OWASP Testing Guide](https://owasp.org/www-project-web-security-testing-guide/)
 - [OWASP Cheat Sheet Series](https://cheatsheetseries.owasp.org/)
-- [Common Vulnerability Scoring System (CVSS)](https://www.first.org/cvss/)
-- [ISO 27001 - Management de la sécurité de l'information](https://www.iso.org/fr/isoiec-27001-information-security.html)
+- [NIST Cybersecurity Framework](https://www.nist.gov/cyberframework)

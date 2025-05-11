@@ -2,24 +2,42 @@
 session_start();
 include 'db.php';
 
+// Génération d'un token CSRF s'il n'existe pas déjà
+if (!isset($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
 $message_sent = false;
 $error = false;
+$comment = '';
+$display_comment = false;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $name = isset($_POST['name']) ? $_POST['name'] : '';
-    $email = isset($_POST['email']) ? $_POST['email'] : '';
-    $subject = isset($_POST['subject']) ? $_POST['subject'] : '';
-    $message = isset($_POST['message']) ? $_POST['message'] : '';
-    
-    if (!empty($name) && !empty($email) && !empty($message)) {
-        // Vulnérable à l'injection de commandes - simulation
-        // Dans un cas réel, on utiliserait mail() ou autre fonction
-        $command = "echo 'De: $name <$email>\nSujet: $subject\n\n$message' >> messages.txt";
-        // exec($command); // Commenté pour éviter l'exécution réelle
-        
-        $message_sent = true;
+    // Vérification du token CSRF
+    if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
+        $error = "Erreur de validation du formulaire. Veuillez réessayer.";
     } else {
-        $error = "Veuillez remplir tous les champs obligatoires.";
+        $name = isset($_POST['name']) ? $_POST['name'] : '';
+        $email = isset($_POST['email']) ? $_POST['email'] : '';
+        $subject = isset($_POST['subject']) ? $_POST['subject'] : '';
+        $message = isset($_POST['message']) ? $_POST['message'] : '';
+        
+        if (!empty($name) && !empty($email) && !empty($message)) {
+            // Vulnérable à l'injection de commandes - simulation
+            // Dans un cas réel, on utiliserait mail() ou autre fonction
+            $command = "echo 'De: $name <$email>\nSujet: $subject\n\n$message' >> messages.txt";
+            // exec($command); // Commenté pour éviter l'exécution réelle
+            
+            $message_sent = true;
+        } else {
+            $error = "Veuillez remplir tous les champs obligatoires.";
+        }
+
+        if (isset($_POST['comment'])) {
+            // Assainissement de l'entrée utilisateur pour éviter les attaques XSS
+            $comment = htmlspecialchars($_POST['comment'], ENT_QUOTES, 'UTF-8');
+            $display_comment = true;
+        }
     }
 }
 ?>
@@ -31,6 +49,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <title>Contact - TechShop</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css">
+    <meta http-equiv="X-Content-Type-Options" content="nosniff">
+    <meta http-equiv="X-Frame-Options" content="DENY">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline';">
     <style>
         .contact-info {
             background-color: #f8f9fa;
@@ -42,6 +63,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             padding: 30px;
             border-radius: 8px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .comment-display {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #f0f4f8;
+            border-left: 4px solid #4a6eb5;
+            border-radius: 4px;
+        }
+        .alert {
+            padding: 12px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+        }
+        .alert-danger {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
         }
     </style>
 </head>
@@ -125,8 +163,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             <div class="alert alert-danger"><?php echo $error; ?></div>
                         <?php endif; ?>
                         
+                        <?php if ($display_comment): ?>
+                            <div class="comment-display">
+                                Votre commentaire : <?php echo $comment; ?>
+                            </div>
+                        <?php endif; ?>
+                        
                         <h3 class="mb-4">Envoyez-nous un message</h3>
                         <form method="POST">
+                            <!-- Protection CSRF -->
+                            <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
+                            
                             <div class="row">
                                 <div class="col-md-6 mb-3">
                                     <label for="name" class="form-label">Nom complet *</label>
@@ -144,6 +191,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             <div class="mb-4">
                                 <label for="message" class="form-label">Message *</label>
                                 <textarea class="form-control" id="message" name="message" rows="5" required></textarea>
+                            </div>
+                            <div class="mb-4">
+                                <label for="comment" class="form-label">Laissez un commentaire :</label>
+                                <input type="text" class="form-control" id="comment" name="comment" placeholder="Votre commentaire ici..." required>
                             </div>
                             <button type="submit" class="btn btn-primary">Envoyer le message</button>
                         </form>

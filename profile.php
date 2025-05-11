@@ -8,10 +8,17 @@ if (!isset($_SESSION['user_id'])) {
     exit;
 }
 
-// Récupération des informations de l'utilisateur
+// Génération du token CSRF s'il n'existe pas déjà
+if (!isset($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
+// Récupération des informations de l'utilisateur avec une requête préparée
 $user_id = $_SESSION['user_id'];
-$sql = "SELECT * FROM users WHERE id = $user_id"; // Vulnérable à l'injection SQL
-$result = $conn->query($sql);
+$stmt = $conn->prepare("SELECT * FROM users WHERE id = ?");
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$result = $stmt->get_result();
 $user = $result->fetch_assoc();
 
 // Initialisation des variables
@@ -20,72 +27,90 @@ $error_message = "";
 
 // Traitement de la mise à jour du profil
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // Vérification du token CSRF
+    if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
+        $error_message = "Erreur de validation du formulaire. Veuillez réessayer.";
+    } 
     // Mise à jour des informations de base
-    if (isset($_POST['update_profile'])) {
-        $email = $_POST['email'];
-        $fullname = $_POST['fullname'];
-        $bio = $_POST['bio'];
+    else if (isset($_POST['update_profile'])) {
+        $email = filter_var($_POST['email'], FILTER_SANITIZE_EMAIL);
+        $fullname = htmlspecialchars(trim($_POST['fullname']), ENT_QUOTES, 'UTF-8');
+        $bio = htmlspecialchars(trim($_POST['bio']), ENT_QUOTES, 'UTF-8');
         
-        // Requête vulnérable à l'injection SQL
-        $update_sql = "UPDATE users SET email = '$email', fullname = '$fullname', bio = '$bio' WHERE id = $user_id";
+        // Requête préparée pour éviter les injections SQL
+        $update_stmt = $conn->prepare("UPDATE users SET email = ?, fullname = ?, bio = ? WHERE id = ?");
+        $update_stmt->bind_param("sssi", $email, $fullname, $bio, $user_id);
         
-        if ($conn->query($update_sql)) {
+        if ($update_stmt->execute()) {
             $success_message = "Profil mis à jour avec succès";
             
             // Mise à jour des données de session
             $_SESSION['email'] = $email;
             
-            // Rafraîchir les données utilisateur
-            $result = $conn->query($sql);
+            // Rafraîchir les données utilisateur avec une requête préparée
+            $stmt->execute();
+            $result = $stmt->get_result();
             $user = $result->fetch_assoc();
         } else {
-            $error_message = "Erreur lors de la mise à jour du profil: " . $conn->error;
+            $error_message = "Erreur lors de la mise à jour du profil";
+            // On ne montre pas l'erreur SQL en production
+            error_log("Erreur SQL: " . $conn->error);
         }
     }
     
-    // Traitement de l'upload de photo (vulnérable)
-    if (isset($_FILES['profile_picture']) && $_FILES['profile_picture']['error'] == 0) {
+    // Traitement de l'upload de photo (sécurisé)
+    else if (isset($_FILES['profile_picture']) && $_FILES['profile_picture']['error'] == 0) {
+        // Vérification du token CSRF (déjà fait plus haut)
+        
         $filename = $_FILES['profile_picture']['name'];
-        $filetype = $_FILES['profile_picture']['type'];
         $filesize = $_FILES['profile_picture']['size'];
+        $tmp_name = $_FILES['profile_picture']['tmp_name'];
         
-        // VULNÉRABLE : Vérification des extensions facilement contournable
-        // Utilise seulement l'extension sans vérifier le contenu réel
-        $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
-        
-        // Liste d'extensions autorisées - inclut les images et d'autres formats
-        $allowed = array('jpg', 'jpeg', 'png', 'gif');
-        
-        // VULNÉRABLE : Double extension possible (ex: shell.php.jpg)
-        // Aucune vérification n'est effectuée pour les doubles extensions
-        
-        // VULNÉRABLE : Vérification qui peut être contournée avec un bypass de nom de fichier
-        if (in_array($ext, $allowed) || empty($ext)) {  // Accepte même si l'extension est vide
-            // VULNÉRABLE : Utilise le nom de fichier fourni par l'utilisateur
-            $new_filename = $filename;
-            
-            // VULNÉRABLE : Ne vérifie pas le contenu réel du fichier
-            $upload_path = "uploads/" . $new_filename;
-            
-            if (move_uploaded_file($_FILES['profile_picture']['tmp_name'], $upload_path)) {
-                // Mise à jour de la photo de profil dans la base de données
-                $update_pic_sql = "UPDATE users SET profile_picture = '$upload_path' WHERE id = $user_id";
-                
-                if ($conn->query($update_pic_sql)) {
-                    $success_message = "Photo de profil mise à jour avec succès";
-                    
-                    // Rafraîchir les données utilisateur
-                    $result = $conn->query($sql);
-                    $user = $result->fetch_assoc();
-                } else {
-                    $error_message = "Erreur lors de la mise à jour de la photo: " . $conn->error;
-                }
-            } else {
-                $error_message = "Erreur lors de l'upload du fichier";
-            }
+        // Vérification de la taille du fichier (max 2MB)
+        if ($filesize > 2097152) {
+            $error_message = "Le fichier est trop volumineux. Taille maximale: 2MB.";
         } else {
-            // Affiche un message d'erreur mais qui peut être contourné
-            $error_message = "Type de fichier non autorisé. Seuls les fichiers JPG, JPEG, PNG et GIF sont acceptés.";
+            // Vérification du type MIME
+            $finfo = new finfo(FILEINFO_MIME_TYPE);
+            $mime_type = $finfo->file($tmp_name);
+            $allowed_mime_types = [
+                'image/jpeg',
+                'image/png',
+                'image/gif'
+            ];
+            
+            // Vérification de l'extension
+            $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
+            $allowed_extensions = ['jpg', 'jpeg', 'png', 'gif'];
+            
+            if (!in_array($mime_type, $allowed_mime_types) || !in_array($ext, $allowed_extensions)) {
+                $error_message = "Type de fichier non autorisé. Seuls les fichiers JPG, JPEG, PNG et GIF sont acceptés.";
+            } else {
+                // Génération d'un nom de fichier sécurisé et unique
+                $new_filename = bin2hex(random_bytes(16)) . '.' . $ext;
+                $upload_path = "uploads/" . $new_filename;
+                
+                // Déplacement du fichier
+                if (move_uploaded_file($tmp_name, $upload_path)) {
+                    // Mise à jour de la photo de profil dans la base de données
+                    $update_pic_stmt = $conn->prepare("UPDATE users SET profile_picture = ? WHERE id = ?");
+                    $update_pic_stmt->bind_param("si", $upload_path, $user_id);
+                    
+                    if ($update_pic_stmt->execute()) {
+                        $success_message = "Photo de profil mise à jour avec succès";
+                        
+                        // Rafraîchir les données utilisateur
+                        $stmt->execute();
+                        $result = $stmt->get_result();
+                        $user = $result->fetch_assoc();
+                    } else {
+                        $error_message = "Erreur lors de la mise à jour de la photo";
+                        error_log("Erreur SQL: " . $conn->error);
+                    }
+                } else {
+                    $error_message = "Erreur lors de l'upload du fichier";
+                }
+            }
         }
     }
 }
@@ -101,6 +126,11 @@ if (!file_exists('uploads')) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Mon Profil - TechShop</title>
+    <!-- Ajout d'en-têtes de sécurité -->
+    <meta http-equiv="X-Content-Type-Options" content="nosniff">
+    <meta http-equiv="X-Frame-Options" content="DENY">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net;">
+    
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css">
     <style>
@@ -264,13 +294,13 @@ if (!file_exists('uploads')) {
     <div class="container">
         <?php if(!empty($success_message)): ?>
             <div class="alert alert-success" role="alert">
-                <?php echo $success_message; ?>
+                <?php echo htmlspecialchars($success_message); ?>
             </div>
         <?php endif; ?>
         
         <?php if(!empty($error_message)): ?>
             <div class="alert alert-danger" role="alert">
-                <?php echo $error_message; ?>
+                <?php echo htmlspecialchars($error_message); ?>
             </div>
         <?php endif; ?>
     
@@ -283,6 +313,9 @@ if (!file_exists('uploads')) {
                         Informations personnelles
                     </h4>
                     <form method="post" action="">
+                        <!-- Protection CSRF -->
+                        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
+                        
                         <div class="mb-3">
                             <label for="username" class="form-label">Nom d'utilisateur</label>
                             <input type="text" class="form-control" id="username" name="username" value="<?php echo htmlspecialchars($user['username']); ?>" readonly>
@@ -310,13 +343,16 @@ if (!file_exists('uploads')) {
             
             <!-- Photo de profil et sécurité -->
             <div class="col-md-4">
-                <!-- Upload de photo (vulnérable) -->
+                <!-- Upload de photo (sécurisé) -->
                 <div class="card profile-card">
                     <h4 class="card-title">
                         <i class="fas fa-camera me-2"></i>
                         Photo de profil
                     </h4>
                     <form method="post" action="" enctype="multipart/form-data">
+                        <!-- Protection CSRF -->
+                        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
+                        
                         <div class="text-center mb-3">
                             <img src="<?php echo isset($user['profile_picture']) ? htmlspecialchars($user['profile_picture']) : 'images/default-profile.jpg'; ?>" alt="Photo de profil actuelle" class="img-fluid rounded mb-3" style="max-height: 150px;">
                             
@@ -324,7 +360,7 @@ if (!file_exists('uploads')) {
                                 <i class="fas fa-upload me-1"></i>
                                 Choisir une photo
                             </label>
-                            <input type="file" id="profile_picture" name="profile_picture" class="form-control">
+                            <input type="file" id="profile_picture" name="profile_picture" class="form-control" accept="image/jpeg,image/png,image/gif">
                             <small class="form-text text-muted d-block mt-2">JPG, JPEG, PNG ou GIF. Max 2MB.</small>
                         </div>
                         <button type="submit" class="btn btn-primary w-100">
@@ -423,8 +459,8 @@ if (!file_exists('uploads')) {
             </div>
             <hr>
             <div class="text-center">
-                <p class="mb-0">&copy; <?php echo date('Y'); ?> TechShop - Application de démonstration (vulnérable pour tests de sécurité)</p>
-                <p class="small text-muted mt-2">Ne pas utiliser en environnement de production</p>
+                <p class="mb-0">&copy; <?php echo date('Y'); ?> TechShop - Version sécurisée</p>
+                <p class="small text-muted mt-2">Application corrigée contre les principales vulnérabilités</p>
             </div>
         </div>
     </footer>

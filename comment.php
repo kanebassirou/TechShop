@@ -1,6 +1,7 @@
 <?php
 if (isset($_POST['comment'])) {
-    $comment = $_POST['comment'];
+    $comment = htmlspecialchars($_POST['comment'], ENT_QUOTES, 'UTF-8'); // Échapper les caractères spéciaux
+    // pour éviter les injections XSS
     echo "<div class='comment-display'>Votre commentaire : " . $comment . "</div>";
 }
 ?>

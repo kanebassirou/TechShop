@@ -2,9 +2,10 @@
 include 'db.php';
 session_start();
 
-// Récupération des produits depuis la base de données
-$sql = "SELECT * FROM products LIMIT 6";
-$result = $conn->query($sql);
+// Récupération des produits depuis la base de données - Utiliser des requêtes préparées
+$stmt = $conn->prepare("SELECT * FROM products LIMIT 6");
+$stmt->execute();
+$result = $stmt->get_result();
 
 $products = [];
 if ($result && $result->num_rows > 0) {
@@ -13,7 +14,7 @@ if ($result && $result->num_rows > 0) {
     }
 }
 
-// Récupération du paramètre de recherche (vulnérable à XSS)
+// Récupération du paramètre de recherche (correction du XSS)
 $search_term = isset($_GET['search']) ? $_GET['search'] : '';
 ?>
 <!DOCTYPE html>
@@ -22,6 +23,11 @@ $search_term = isset($_GET['search']) ? $_GET['search'] : '';
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>TechShop - Votre Boutique Tech</title>
+  <!-- Ajout d'en-têtes de sécurité -->
+  <meta http-equiv="X-Content-Type-Options" content="nosniff">
+  <meta http-equiv="X-Frame-Options" content="DENY">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; script-src 'self' https://cdn.jsdelivr.net;">
+  
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css">
   <style>
@@ -278,8 +284,9 @@ $search_term = isset($_GET['search']) ? $_GET['search'] : '';
             </a>
           </li>
         </ul>
+        <!-- Formulaire de recherche sécurisé -->
         <form class="d-flex search-form me-3" action="index.php" method="GET">
-          <input class="form-control" type="search" name="search" placeholder="Rechercher..." value="<?php echo htmlspecialchars($search_term); ?>">
+          <input class="form-control" type="search" name="search" placeholder="Rechercher..." value="<?php echo htmlspecialchars($search_term, ENT_QUOTES, 'UTF-8'); ?>">
           <button class="btn btn-primary" type="submit">
             <i class="fas fa-search"></i>
           </button>
@@ -313,11 +320,11 @@ $search_term = isset($_GET['search']) ? $_GET['search'] : '';
     </div>
   </nav>
 
-  <!-- Message de recherche (vulnérable au XSS) -->
+  <!-- Message de recherche (correction du XSS) -->
   <?php if(!empty($search_term)): ?>
   <div class="container">
     <div class="search-result">
-      <h4><i class="fas fa-search me-2"></i>Résultats pour : <?php echo $search_term; ?></h4>
+      <h4><i class="fas fa-search me-2"></i>Résultats pour : <?php echo htmlspecialchars($search_term, ENT_QUOTES, 'UTF-8'); ?></h4>
     </div>
   </div>
   <?php endif; ?>
@@ -389,7 +396,7 @@ $search_term = isset($_GET['search']) ? $_GET['search'] : '';
     </div>
   </div>
 
-  <!-- Section newsletter -->
+  <!-- Section newsletter avec protection CSRF -->
   <div class="container mb-5">
     <div class="row justify-content-center">
       <div class="col-md-8">
@@ -397,10 +404,11 @@ $search_term = isset($_GET['search']) ? $_GET['search'] : '';
           <div class="card-body p-5 text-center">
             <h3 class="mb-4">Abonnez-vous à notre newsletter</h3>
             <p class="mb-4">Recevez nos dernières offres et actualités directement dans votre boîte mail</p>
-            <!-- Formulaire vulnérable -->
-            <form class="row g-2 justify-content-center">
+            <!-- Formulaire corrigé avec token CSRF -->
+            <form class="row g-2 justify-content-center" method="POST" action="subscribe.php">
+              <input type="hidden" name="csrf_token" value="<?php echo isset($_SESSION['csrf_token']) ? $_SESSION['csrf_token'] : (($_SESSION['csrf_token'] = bin2hex(random_bytes(32)))); ?>">
               <div class="col-auto flex-grow-1">
-                <input type="email" class="form-control form-control-lg" placeholder="Votre adresse email">
+                <input type="email" name="email" class="form-control form-control-lg" placeholder="Votre adresse email" required>
               </div>
               <div class="col-auto">
                 <button type="submit" class="btn btn-primary btn-lg">S'abonner</button>
@@ -454,12 +462,27 @@ $search_term = isset($_GET['search']) ? $_GET['search'] : '';
       </div>
       <hr>
       <div class="text-center">
-        <p class="mb-0">&copy; <?php echo date('Y'); ?> TechShop - Application de démonstration (vulnérable pour tests de sécurité)</p>
-        <p class="small text-muted mt-2">Ne pas utiliser en environnement de production</p>
+        <p class="mb-0">&copy; <?php echo date('Y'); ?> TechShop - Tous droits réservés</p>
+        <p class="small text-muted mt-2">Version sécurisée</p>
       </div>
     </div>
   </footer>
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+  
+  <!-- Protection supplémentaire contre XSS -->
+  <script>
+    // Sanitize any user inputs that might be used in JavaScript
+    function sanitizeInputs() {
+      const searchParams = new URLSearchParams(window.location.search);
+      if (searchParams.has('search')) {
+        const cleanSearch = DOMPurify.sanitize(searchParams.get('search'));
+        // Use the cleaned value if needed in JavaScript
+      }
+    }
+    
+    // Add this if you're using DOMPurify
+    // document.addEventListener('DOMContentLoaded', sanitizeInputs);
+  </script>
 </body>
 </html>

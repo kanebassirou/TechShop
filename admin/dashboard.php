@@ -1,35 +1,56 @@
 <?php
+// Définir une constante pour sécuriser l'inclusion
+define('SECURE_ACCESS', true);
 
-include '../db.php';
+// Démarrer la session avant toute sortie
 session_start();
 
-// Vérification de l'authentification vulnérable (ne vérifie que si l'utilisateur est connecté)
-// La vérification du rôle admin est implémentée mais facilement contournable
-if (!isset($_SESSION['user_id'])) {
-    // Si l'utilisateur n'est pas connecté, rediriger vers la page de connexion
-    header('Location: ../login.php');
-    exit;
-}
+// Inclusion de la connexion à la base de données
+include '../db.php';
 
-// Faille : pas de vérification du rôle admin ici
-// Un utilisateur normal peut simplement taper l'URL pour accéder au panneau d'administration
+// Inclusion du système d'authentification admin sécurisé
+include 'admin_auth.php';
 
-// Même si on tente de vérifier le rôle plus loin dans une condition, le code continue à s'exécuter
-$is_admin = isset($_SESSION['role']) && $_SESSION['role'] == 'admin';
+// À ce stade, si l'utilisateur n'est pas admin, il a déjà été redirigé
 
-// Récupération des statistiques (requêtes vulnérables)
-$total_users = $conn->query("SELECT COUNT(*) as count FROM users")->fetch_assoc()['count'];
-$total_products = $conn->query("SELECT COUNT(*) as count FROM products")->fetch_assoc()['count'];
-$total_comments = $conn->query("SELECT COUNT(*) as count FROM comments")->fetch_assoc()['count'];
+// Utilisation de requêtes préparées pour récupérer les statistiques en toute sécurité
+$stmt_users = $conn->prepare("SELECT COUNT(*) as count FROM users");
+$stmt_users->execute();
+$total_users = $stmt_users->get_result()->fetch_assoc()['count'];
 
-// Si une action de suppression est demandée (vulnérable)
+$stmt_products = $conn->prepare("SELECT COUNT(*) as count FROM products");
+$stmt_products->execute();
+$total_products = $stmt_products->get_result()->fetch_assoc()['count'];
+
+$stmt_comments = $conn->prepare("SELECT COUNT(*) as count FROM comments");
+$stmt_comments->execute();
+$total_comments = $stmt_comments->get_result()->fetch_assoc()['count'];
+
+// Traitement sécurisé de la suppression de produit
 if (isset($_GET['delete_product'])) {
-    $product_id = $_GET['delete_product'];
-    $conn->query("DELETE FROM products WHERE id = $product_id");
+    // Vérification CSRF
+    if (!isset($_GET['csrf_token']) || $_GET['csrf_token'] !== $_SESSION['csrf_token']) {
+        $_SESSION['error_message'] = "Erreur de validation du formulaire. Veuillez réessayer.";
+        header("Location: dashboard.php");
+        exit;
+    }
+    
+    // Conversion en entier pour éviter l'injection SQL
+    $product_id = (int)$_GET['delete_product'];
+    
+    // Utilisation de requête préparée pour la suppression
+    $delete_stmt = $conn->prepare("DELETE FROM products WHERE id = ?");
+    $delete_stmt->bind_param("i", $product_id);
+    $delete_stmt->execute();
+    
     header("Location: dashboard.php?success=1");
     exit;
 }
 
+// Génération d'un nouveau token CSRF si nécessaire
+if (!isset($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
 ?>
 <!DOCTYPE html>
 <html lang="fr">
@@ -37,6 +58,12 @@ if (isset($_GET['delete_product'])) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Tableau de bord - Administration TechShop</title>
+    
+    <!-- Ajout d'en-têtes de sécurité -->
+    <meta http-equiv="X-Content-Type-Options" content="nosniff">
+    <meta http-equiv="X-Frame-Options" content="DENY">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; script-src 'self' https://cdn.jsdelivr.net;">
+    
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css">
     <style>
@@ -129,13 +156,6 @@ if (isset($_GET['delete_product'])) {
             justify-content: space-between;
             align-items: center;
         }
-        
-        .warning-banner {
-            background-color: #fcf8e3;
-            border-left: 5px solid #f0ad4e;
-            padding: 10px 15px;
-            margin-bottom: 20px;
-        }
     </style>
 </head>
 <body>
@@ -186,18 +206,19 @@ if (isset($_GET['delete_product'])) {
                 </div>
                 
                 <div class="container-fluid px-4">
-                    <!-- Affichage conditionnel d'un avertissement si l'utilisateur n'est pas admin -->
-                    <?php if(!$is_admin): ?>
-                    <div class="warning-banner">
-                        <i class="fas fa-exclamation-triangle text-warning me-2"></i>
-                        <strong>Attention :</strong> Vous accédez à une zone réservée aux administrateurs. Cette faille de sécurité est intentionnelle pour des fins éducatives.
-                    </div>
-                    <?php endif; ?>
-                    
-                    <!-- Message de succès (vulnérable à XSS) -->
+                    <!-- Message de succès sécurisé -->
                     <?php if (isset($_GET['success'])): ?>
                     <div class="alert alert-success">
                         Opération effectuée avec succès !
+                    </div>
+                    <?php endif; ?>
+                    
+                    <?php if (isset($_SESSION['error_message'])): ?>
+                    <div class="alert alert-danger">
+                        <?php 
+                            echo htmlspecialchars($_SESSION['error_message']);
+                            unset($_SESSION['error_message']); 
+                        ?>
                     </div>
                     <?php endif; ?>
                     
@@ -277,9 +298,10 @@ if (isset($_GET['delete_product'])) {
                                     </thead>
                                     <tbody>
                                         <?php 
-                                        // Récupération des produits récents (vulnérable à l'injection SQL)
-                                        $products_query = "SELECT * FROM products ORDER BY id DESC LIMIT 5";
-                                        $products_result = $conn->query($products_query);
+                                        // Récupération des produits récents avec requête préparée
+                                        $products_stmt = $conn->prepare("SELECT * FROM products ORDER BY id DESC LIMIT 5");
+                                        $products_stmt->execute();
+                                        $products_result = $products_stmt->get_result();
                                         
                                         if ($products_result && $products_result->num_rows > 0) {
                                             while ($product = $products_result->fetch_assoc()): 
@@ -302,10 +324,11 @@ if (isset($_GET['delete_product'])) {
                                                     <?php endif; ?>
                                                 </td>
                                                 <td>
-                                                    <a href="edit_product.php?id=<?php echo $product['id']; ?>" class="btn btn-sm btn-outline-primary">
+                                                    <a href="edit_product.php?id=<?php echo $product['id']; ?>&csrf_token=<?php echo $_SESSION['csrf_token']; ?>" class="btn btn-sm btn-outline-primary">
                                                         <i class="fas fa-edit"></i>
                                                     </a>
-                                                    <a href="dashboard.php?delete_product=<?php echo $product['id']; ?>" class="btn btn-sm btn-outline-danger"
+                                                    <a href="dashboard.php?delete_product=<?php echo $product['id']; ?>&csrf_token=<?php echo $_SESSION['csrf_token']; ?>" 
+                                                       class="btn btn-sm btn-outline-danger"
                                                        onclick="return confirm('Êtes-vous sûr de vouloir supprimer ce produit ?');">
                                                         <i class="fas fa-trash-alt"></i>
                                                     </a>
@@ -323,7 +346,7 @@ if (isset($_GET['delete_product'])) {
                         </div>
                     </div>
                     
-                    <!-- Commandes récentes -->
+                    <!-- Commentaires récents -->
                     <div class="row mt-5">
                         <div class="col-12">
                             <h4 class="mb-4">Commentaires récents</h4>
@@ -341,13 +364,16 @@ if (isset($_GET['delete_product'])) {
                                     </thead>
                                     <tbody>
                                         <?php 
-                                        // Récupération des commentaires récents (vulnérable à l'injection SQL)
-                                        $comments_query = "SELECT c.*, u.username, p.name as product_name 
-                                                         FROM comments c 
-                                                         JOIN users u ON c.user_id = u.id 
-                                                         JOIN products p ON c.product_id = p.id 
-                                                         ORDER BY c.created_at DESC LIMIT 5";
-                                        $comments_result = $conn->query($comments_query);
+                                        // Récupération des commentaires récents avec requête préparée
+                                        $comments_stmt = $conn->prepare(
+                                            "SELECT c.*, u.username, p.name as product_name 
+                                             FROM comments c 
+                                             JOIN users u ON c.user_id = u.id 
+                                             JOIN products p ON c.product_id = p.id 
+                                             ORDER BY c.created_at DESC LIMIT 5"
+                                        );
+                                        $comments_stmt->execute();
+                                        $comments_result = $comments_stmt->get_result();
                                         
                                         if ($comments_result && $comments_result->num_rows > 0) {
                                             while ($comment = $comments_result->fetch_assoc()): 
