@@ -52,6 +52,7 @@ L'application contient volontairement les vulnérabilités suivantes à des fins
 - Divulgation des versions de logiciels
 - Affichage des erreurs PHP
 - Commentaires contenant des informations sensibles
+- **Mots de passe stockés en clair** dans la base de données (sans hachage ni cryptage)
 
 ### 7. Contrôle d'accès défectueux
 
